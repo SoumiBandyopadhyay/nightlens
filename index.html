@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#070b14">
+<title>NightLens: how dark is your sky?</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root {
+    --ink: #070b14; --panel: #101a2c; --line: #22314d;
+    --star: #e8eef8; --dim: #93a3bf; --lamp: #f2a93b; --ok: #6ee7b7;
+    --display: Georgia, "Times New Roman", serif;
+    --body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--ink); color: var(--star); font: 16px/1.5 var(--body); }
+  body { padding: env(safe-area-inset-top) 0 calc(72px + env(safe-area-inset-bottom)); }
+  header { padding: 20px 20px 8px; }
+  h1 { margin: 0; font: 600 28px/1.15 var(--display); letter-spacing: .2px; }
+  header p { margin: 4px 0 0; color: var(--dim); }
+  main { padding: 12px 20px 24px; max-width: 640px; margin: 0 auto; }
+  section[hidden] { display: none; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+  video, canvas.preview { width: 100%; border-radius: 10px; background: #000; display: block; aspect-ratio: 3/4; object-fit: cover; }
+  button { font: inherit; font-weight: 600; color: var(--ink); background: var(--lamp); border: 0; border-radius: 10px; padding: 12px 18px; width: 100%; margin-top: 12px; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--star); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; }
+  button:focus-visible, nav button:focus-visible { outline: 3px solid var(--star); outline-offset: 2px; }
+  .hint { color: var(--dim); font-size: 14px; margin: 8px 0 0; }
+  .result { border-radius: 14px; padding: 20px; margin-bottom: 14px; border: 1px solid var(--line); }
+  .result .big { font: 600 56px/1 var(--display); }
+  .result .meta { margin-top: 8px; color: var(--star); opacity: .9; }
+  .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9); }
+  #map { height: 62vh; border-radius: 14px; border: 1px solid var(--line); }
+  .legend { display: flex; gap: 4px; margin-top: 10px; font-size: 13px; color: var(--dim); align-items: center; }
+  .legend i { flex: 1; height: 10px; border-radius: 3px; }
+  ul.list { list-style: none; margin: 0; padding: 0; }
+  ul.list li { padding: 10px 0; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 12px; }
+  ul.list li:last-child { border-bottom: 0; }
+  nav { position: fixed; left: 0; right: 0; bottom: 0; display: flex; background: #0b1424; border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); }
+  nav button { margin: 0; border-radius: 0; background: transparent; color: var(--dim); padding: 16px 8px; }
+  nav button[aria-selected="true"] { color: var(--lamp); box-shadow: inset 0 3px 0 var(--lamp); }
+  @media (prefers-reduced-motion: no-preference) { .result { transition: background .6s; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>NightLens</h1>
+  <p>Measure your sky with a phone camera. See how dark your place really is.</p>
+</header>
+
+<main>
+  <!-- MEASURE -->
+  <section id="tab-measure">
+    <div class="panel">
+      <video id="cam" playsinline muted></video>
+      <canvas id="work" hidden></canvas>
+      <button id="startBtn">Open camera</button>
+      <button id="snapBtn" disabled>Measure this sky</button>
+      <p class="hint">Stand away from direct lights, point the phone straight up (or at a clear patch of sky), and hold it still for 3 seconds.</p>
+    </div>
+    <div id="result" class="result" hidden></div>
+    <button id="saveBtn" class="ghost" hidden>Add this reading to the map</button>
+  </section>
+
+  <!-- MAP -->
+  <section id="tab-map" hidden>
+    <div id="map"></div>
+    <div class="legend"><span>Dark</span><i style="background:#1b2a6b"></i><i style="background:#2d6bd6"></i><i style="background:#3fb6a8"></i><i style="background:#c9d94a"></i><i style="background:#f2a93b"></i><i style="background:#e5532f"></i><span>Bright</span></div>
+    <p class="hint" id="mapNote"></p>
+  </section>
+
+  <!-- TONIGHT -->
+  <section id="tab-tonight" hidden>
+    <div class="panel">
+      <strong>Cloud cover tonight</strong>
+      <ul class="list" id="cloudList"><li><span>Loading...</span></li></ul>
+    </div>
+    <div class="panel">
+      <strong>ISS passes in the next 24 hours</strong>
+      <ul class="list" id="passList"><li><span>Loading...</span></li></ul>
+      <p class="hint">Only passes after dark are listed. The ISS is visible only while sunlit, so a pass is a possibility, not a guarantee.</p>
+    </div>
+  </section>
+</main>
+
+<nav role="tablist">
+  <button role="tab" aria-selected="true" data-tab="measure">Measure</button>
+  <button role="tab" aria-selected="false" data-tab="map">Map</button>
+  <button role="tab" aria-selected="false" data-tab="tonight">Tonight</button>
+</nav>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/satellite.js/4.1.3/satellite.min.js"></script>
+<script>
+/* ---------- Optional shared backend (Supabase). Leave empty to store readings only on this phone. ---------- */
+const SUPABASE_URL = 'https://supabase.com/dashboard/project/zuzqmqgfirsgoqcvmgva/settings/api-keys';   // e.g. https://xxxx.supabase.co
+const SUPABASE_KEY = 'sb_publishable_h8VWUvivQLufkvTXlmk5Lg_q_uGVE4B';   // anon public key
+const HAS_REMOTE = !!(SUPABASE_URL && SUPABASE_KEY);
+/* Legacy anon keys (eyJ...) need an Authorization header; new publishable keys (sb_publishable_...) must not send one. */
+const sbHeaders = (extra = {}) => ({ apikey: SUPABASE_KEY, ...(SUPABASE_KEY.startsWith('eyJ') ? { Authorization: 'Bearer ' + SUPABASE_KEY } : {}), ...extra });
+
+/* ---------- Bortle helpers ---------- */
+const BORTLE_COLORS = ['', '#1b2a6b', '#1f3f9a', '#2d6bd6', '#3a9ec0', '#3fb6a8', '#c9d94a', '#f2a93b', '#ee7b30', '#e5532f'];
+const BORTLE_TEXT = [
+  '', 'Excellent dark sky', 'Truly dark sky', 'Rural sky', 'Rural/suburban sky',
+  'Suburban sky', 'Bright suburban sky', 'Suburban/urban sky', 'City sky', 'Inner-city sky'
+];
+
+/* Rough, UNCALIBRATED mapping from star count in a locked-exposure frame to Bortle class.
+   Calibrate these thresholds per phone model against a reference sky-quality meter. */
+function estimateBortle(stars, skyLum) {
+  const table = [[80, 2], [50, 3], [30, 4], [18, 5], [10, 6], [5, 7], [2, 8]];
+  let b = 9;
+  for (const [min, cls] of table) { if (stars >= min) { b = cls; break; } }
+  if (skyLum > 90) b = Math.min(9, b + 1);   // bright background: likely more glow than stars suggest
+  if (skyLum < 15 && b > 3) b -= 1;
+  return b;
+}
+
+/* ---------- Tabs ---------- */
+const tabs = document.querySelectorAll('nav button');
+tabs.forEach(btn => btn.addEventListener('click', () => {
+  tabs.forEach(b => b.setAttribute('aria-selected', String(b === btn)));
+  ['measure', 'map', 'tonight'].forEach(t => document.getElementById('tab-' + t).hidden = (t !== btn.dataset.tab));
+  if (btn.dataset.tab === 'map') showMap();
+  if (btn.dataset.tab === 'tonight') loadTonight();
+}));
+
+/* ---------- Location ---------- */
+let here = null;
+function getLocation() {
+  return new Promise((resolve, reject) => {
+    if (here) return resolve(here);
+    if (!navigator.geolocation) return reject(new Error('Location is not available on this device.'));
+    navigator.geolocation.getCurrentPosition(
+      p => { here = { lat: p.coords.latitude, lng: p.coords.longitude }; resolve(here); },
+      () => reject(new Error('Allow location access so readings can be placed on the map.')),
+      { enableHighAccuracy: false, timeout: 10000 });
+  });
+}
+
+/* ---------- Camera + analysis ---------- */
+const video = document.getElementById('cam'), work = document.getElementById('work');
+const startBtn = document.getElementById('startBtn'), snapBtn = document.getElementById('snapBtn');
+const resultEl = document.getElementById('result'), saveBtn = document.getElementById('saveBtn');
+let stream = null, exposureLocked = false, lastReading = null;
+
+startBtn.addEventListener('click', async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 960 } }, audio: false });
+    video.srcObject = stream; await video.play();
+    // Best effort: lock exposure so brightness is comparable between readings (not supported on every phone).
+    const track = stream.getVideoTracks()[0], caps = track.getCapabilities ? track.getCapabilities() : {};
+    const adv = {};
+    if (caps.exposureMode && caps.exposureMode.includes('manual')) {
+      adv.exposureMode = 'manual';
+      if (caps.exposureTime) adv.exposureTime = caps.exposureTime.max ? Math.min(caps.exposureTime.max, 1000) : undefined;
+      if (caps.iso) adv.iso = caps.iso.max;
+    }
+    try { if (Object.keys(adv).length) { await track.applyConstraints({ advanced: [adv] }); exposureLocked = true; } } catch (e) { exposureLocked = false; }
+    snapBtn.disabled = false; startBtn.hidden = true;
+  } catch (e) {
+    alert('Camera could not open. Allow camera access, and open this page over HTTPS.');
+  }
+});
+
+function analyseFrame() {
+  const w = 320, h = Math.round(320 * video.videoHeight / video.videoWidth);
+  work.width = w; work.height = h;
+  const ctx = work.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(video, 0, 0, w, h);
+  const d = ctx.getImageData(0, 0, w, h).data, n = w * h, lum = new Float32Array(n), hist = new Uint32Array(256);
+  for (let i = 0; i < n; i++) {
+    const y = 0.2126 * d[i * 4] + 0.7152 * d[i * 4 + 1] + 0.0722 * d[i * 4 + 2];
+    lum[i] = y; hist[Math.min(255, y | 0)]++;
+  }
+  let acc = 0, median = 0; for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= n / 2) { median = v; break; } }
+  let s = 0, c = 0; for (let i = 0; i < n; i++) if (lum[i] < median + 20) { s += (lum[i] - median) ** 2; c++; }
+  const sigma = Math.sqrt(s / Math.max(1, c));
+  const thr = median + Math.max(30, 5 * sigma);
+  // Count small bright blobs (stars) with a simple flood fill.
+  const seen = new Uint8Array(n); let stars = 0;
+  for (let i = 0; i < n; i++) {
+    if (seen[i] || lum[i] < thr) continue;
+    let size = 0; const stack = [i]; seen[i] = 1;
+    while (stack.length) {
+      const p = stack.pop(); size++;
+      const x = p % w, y = (p / w) | 0;
+      for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, y > 0 ? p - w : -1, y < h - 1 ? p + w : -1]) {
+        if (q >= 0 && !seen[q] && lum[q] >= thr) { seen[q] = 1; stack.push(q); }
+      }
+      if (size > 80) break;
+    }
+    if (size >= 1 && size <= 60) stars++;
+  }
+  return { stars, skyLum: median };
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+snapBtn.addEventListener('click', async () => {
+  snapBtn.disabled = true; snapBtn.textContent = 'Hold still...';
+  const frames = [];
+  for (let i = 0; i < 5; i++) { frames.push(analyseFrame()); await sleep(500); }
+  const med = arr => arr.slice().sort((a, b) => a - b)[Math.floor(arr.length / 2)];
+  const stars = med(frames.map(f => f.stars)), skyLum = med(frames.map(f => f.skyLum));
+  const bortle = estimateBortle(stars, skyLum);
+  const confidence = exposureLocked ? 'medium' : 'low (exposure not locked on this phone)';
+  lastReading = { bortle, stars, lum: Math.round(skyLum * 10) / 10, confidence };
+  resultEl.hidden = false;
+  resultEl.style.background = `linear-gradient(160deg, ${BORTLE_COLORS[bortle]}, #070b14 85%)`;
+  resultEl.innerHTML = `<div class="big">Bortle ${bortle}</div>
+    <div class="meta">${BORTLE_TEXT[bortle]}. ${stars} stars detected, sky brightness ${lastReading.lum}/255. Confidence: ${confidence}.</div>`;
+  saveBtn.hidden = false;
+  snapBtn.disabled = false; snapBtn.textContent = 'Measure again';
+});
+
+/* ---------- Storage ---------- */
+const LS_KEY = 'nightlens.readings';
+const localReadings = () => JSON.parse(localStorage.getItem(LS_KEY) || '[]');
+async function saveReading(r) {
+  const loc = await getLocation();
+  const row = { lat: +loc.lat.toFixed(3), lng: +loc.lng.toFixed(3), bortle: r.bortle, stars: r.stars, lum: r.lum }; // ~100 m rounding for privacy
+  localStorage.setItem(LS_KEY, JSON.stringify([...localReadings(), { ...row, t: Date.now() }]));
+  if (HAS_REMOTE) {
+    await fetch(SUPABASE_URL + '/rest/v1/readings', {
+      method: 'POST',
+      headers: sbHeaders({ 'Content-Type': 'application/json', Prefer: 'return=minimal' }),
+      body: JSON.stringify(row)
+    });
+  }
+}
+async function loadReadings() {
+  if (!HAS_REMOTE) return localReadings();
+  try {
+    const res = await fetch(SUPABASE_URL + '/rest/v1/readings?select=lat,lng,bortle&order=created_at.desc&limit=2000',
+      { headers: sbHeaders() });
+    const data = await res.json();
+    if (!Array.isArray(data)) throw new Error(data.message || 'Supabase error');
+    document.getElementById('mapNote').dataset.err = '';
+    return data;
+  } catch (e) { window.sbError = e.message; return localReadings(); }
+}
+saveBtn.addEventListener('click', async () => {
+  try { await saveReading(lastReading); saveBtn.textContent = 'Added to the map'; saveBtn.disabled = true; setTimeout(() => { saveBtn.hidden = true; saveBtn.disabled = false; saveBtn.textContent = 'Add this reading to the map'; }, 1800); }
+  catch (e) { alert(e.message); }
+});
+
+/* ---------- Map ---------- */
+let map, layer;
+async function showMap() {
+  if (!map) {
+    map = L.map('map').setView([22.9, 88.4], 8);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+    layer = L.layerGroup().addTo(map);
+  }
+  setTimeout(() => map.invalidateSize(), 50);
+  const rows = await loadReadings();
+  layer.clearLayers();
+  rows.forEach(r => L.circleMarker([r.lat, r.lng], { radius: 11, color: '#fff', weight: 1, fillColor: BORTLE_COLORS[r.bortle], fillOpacity: .85 })
+    .bindPopup(`Bortle ${r.bortle}: ${BORTLE_TEXT[r.bortle]}`).addTo(layer));
+  document.getElementById('mapNote').textContent = rows.length
+    ? `${rows.length} reading${rows.length > 1 ? 's' : ''} on the map${HAS_REMOTE && !window.sbError ? ' from everyone' : ' (stored on this phone)'}.`
+    : 'No readings yet. Measure your sky and add it to the map.';
+  if (window.sbError) document.getElementById('mapNote').textContent += ' Shared map error: ' + window.sbError;
+  try { const p = await getLocation(); map.setView([p.lat, p.lng], 11); } catch (e) {}
+}
+
+/* ---------- Tonight: cloud cover + ISS passes ---------- */
+const rad = Math.PI / 180;
+function sunAltitude(date, lat, lng) {   // low-precision solar altitude in degrees
+  const d = date / 86400000 + 2440587.5 - 2451545.0;
+  const g = (357.529 + 0.98560028 * d) % 360, q = (280.459 + 0.98564736 * d) % 360;
+  const L = q + 1.915 * Math.sin(g * rad) + 0.020 * Math.sin(2 * g * rad), e = 23.439 - 0.00000036 * d;
+  const ra = Math.atan2(Math.cos(e * rad) * Math.sin(L * rad), Math.cos(L * rad));
+  const dec = Math.asin(Math.sin(e * rad) * Math.sin(L * rad));
+  const H = ((18.697374558 + 24.06570982441908 * d) % 24 * 15 + lng) * rad - ra;
+  return Math.asin(Math.sin(lat * rad) * Math.sin(dec) + Math.cos(lat * rad) * Math.cos(dec) * Math.cos(H)) / rad;
+}
+const fmt = d => d.toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+let tonightLoaded = false;
+async function loadTonight() {
+  if (tonightLoaded) return;
+  let p; try { p = await getLocation(); } catch (e) { document.getElementById('cloudList').innerHTML = `<li><span>${e.message}</span></li>`; return; }
+  tonightLoaded = true;
+  // Cloud cover (Open-Meteo, no key needed)
+  try {
+    const r = await (await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${p.lat}&longitude=${p.lng}&hourly=cloud_cover&forecast_days=2&timezone=auto`)).json();
+    const now = Date.now(), rows = r.hourly.time.map((t, i) => [new Date(t), r.hourly.cloud_cover[i]])
+      .filter(([t]) => t > now && [20, 22, 0, 2, 4].includes(t.getHours())).slice(0, 5);
+    document.getElementById('cloudList').innerHTML = rows.map(([t, c]) =>
+      `<li><span>${fmt(t)}</span><span>${c}% cloud, ${c < 30 ? 'good for stargazing' : c < 70 ? 'patchy' : 'mostly covered'}</span></li>`).join('') || '<li><span>No forecast available.</span></li>';
+  } catch (e) { document.getElementById('cloudList').innerHTML = '<li><span>Could not load the forecast. Check your connection.</span></li>'; }
+  // ISS passes (CelesTrak TLE + satellite.js)
+  try {
+    const tle = (await (await fetch('https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=tle')).text()).trim().split('\n');
+    const rec = satellite.twoline2satrec(tle[1].trim(), tle[2].trim());
+    const obs = { longitude: p.lng * rad, latitude: p.lat * rad, height: 0.05 };
+    const passes = []; let cur = null;
+    for (let t = Date.now(); t < Date.now() + 864e5; t += 20000) {
+      const date = new Date(t), pv = satellite.propagate(rec, date);
+      if (!pv.position) continue;
+      const look = satellite.ecfToLookAngles(obs, satellite.eciToEcf(pv.position, satellite.gstime(date)));
+      const el = look.elevation / rad;
+      if (el > 10) { if (!cur) cur = { start: date, max: el, maxT: date }; if (el > cur.max) { cur.max = el; cur.maxT = date; } }
+      else if (cur) { cur.end = date; passes.push(cur); cur = null; }
+    }
+    const dark = passes.filter(x => sunAltitude(x.maxT, p.lat, p.lng) < -6);
+    document.getElementById('passList').innerHTML = dark.map(x =>
+      `<li><span>${fmt(x.start)}</span><span>peaks ${Math.round(x.max)}\u00B0 high</span></li>`).join('') || '<li><span>No night-time passes in the next 24 hours.</span></li>';
+  } catch (e) { document.getElementById('passList').innerHTML = '<li><span>Could not load orbit data. Check your connection.</span></li>'; }
+}
+</script>
+</body>
+</html>
